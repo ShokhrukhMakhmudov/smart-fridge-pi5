@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Модели и веса (большие бинари)
+models/*.pt
+models/*.onnx
+models/*.hef
+models/*_ncnn_model/
+runs/
+
+# Датасет (большие бинари + личные данные)
+dataset/*/
+!dataset/README.md
+
+# Логи
+*.log

@@ -1,0 +1,38 @@
+# Зависимости для разработки и обучения на Windows / Linux x86
+#
+# Используется для:
+#   - обучения модели (нужен torch с GPU/MPS, чтобы обучение шло быстро)
+#   - экспорта в ONNX и подготовки к компиляции в HEF
+#   - локальной отладки сервера и CV-цикла без камеры/GPIO
+#
+# Под Windows GPIO работает в мок-режиме, MediaPipe Hands и mediapipe есть.
+# Установка:  pip install -r requirements-dev.txt
+
+# PyTorch — поставьте отдельно нужный вариант (CPU/CUDA/MPS):
+#   pip install torch torchvision               # CPU (универсально)
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121  # CUDA 12.1
+
+# Computer vision
+opencv-python==4.10.0.84
+"numpy<2.0"
+Pillow>=10.0.0
+
+# YOLO + трекинг
+ultralytics>=8.3.0
+lapx>=0.5.5
+
+# Экспорт ONNX и упрощение графа
+onnx>=1.16.0
+onnxsim>=0.4.36
+
+# MediaPipe для подавления по руке
+mediapipe>=0.10.14
+
+# Web-сервер
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.6.0
+websockets>=12.0
+
+# Удобства разработки
+ipython>=8.0

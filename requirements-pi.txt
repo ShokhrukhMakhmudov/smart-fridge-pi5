@@ -1,0 +1,32 @@
+# Зависимости для Raspberry Pi 5 (aarch64 / Raspberry Pi OS Bookworm)
+#
+# ВАЖНО, что НЕ ставится через этот файл:
+#   - torch / torchvision  →  ставьте отдельно с CPU-индекса PyTorch:
+#         pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+#   - picamera2            →  только через apt:  sudo apt install python3-picamera2
+#   - python3-rpi.gpio     →  apt; gpiozero ниже использует lgpio как backend
+#   - hailort              →  отдельный .deb от Hailo (https://hailo.ai/developer-zone/)
+#
+# Все пакеты ниже имеют готовые wheels под aarch64.
+
+# Computer vision
+opencv-python-headless==4.10.0.84
+"numpy<2.0"
+Pillow>=10.0.0
+
+# YOLO + трекинг
+ultralytics>=8.3.0
+lapx>=0.5.5
+
+# MediaPipe (поддержка aarch64 с 0.10.x)
+mediapipe>=0.10.14
+
+# Управление GPIO без root через lgpio backend
+gpiozero>=2.0
+lgpio>=0.2.2.0
+
+# Web-сервер
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.6.0
+websockets>=12.0
