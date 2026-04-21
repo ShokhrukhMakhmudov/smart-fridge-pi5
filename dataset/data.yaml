@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 1
+names: ['Fanta']
+
+roboflow:
+  workspace: fridgeproject-gah4z
+  project: fridgeproject-gah4z
+  version: dataset
+  license: Private
+  url: https://app.roboflow.com/fridgeproject-gah4z/fridgeproject-gah4z/dataset

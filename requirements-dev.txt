@@ -13,8 +13,10 @@
 #   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121  # CUDA 12.1
 
 # Computer vision
-opencv-python==4.10.0.84
-"numpy<2.0"
+opencv-python>=4.10.0
+# numpy<2.0 — рекомендуется для совместимости с MediaPipe, но на Python 3.13
+# под Windows нет prebuilt wheel, поэтому разрешаем и 2.x
+numpy>=1.26.0
 Pillow>=10.0.0
 
 # YOLO + трекинг

@@ -80,6 +80,11 @@ pip install $PIP_FLAGS torch torchvision \
 log "Ставлю Python-зависимости из requirements-pi.txt…"
 pip install $PIP_FLAGS -r requirements-pi.txt
 
+# MediaPipe опционален (нет wheels под Python 3.13). Пробуем, но не падаем.
+log "Пробую установить MediaPipe (подавление по руке, опционально)…"
+pip install $PIP_FLAGS "mediapipe>=0.10.14" || \
+    log "MediaPipe не установился — подавление по руке будет отключено (это нормально)"
+
 # ── Шаг 5. Проверка ──────────────────────────────────────────────
 log "Проверка установленных компонентов:"
 python3 - <<'PY'

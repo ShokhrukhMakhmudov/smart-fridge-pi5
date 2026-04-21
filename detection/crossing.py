@@ -20,7 +20,7 @@ N кадров подряд, генерируется событие:
 """
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable, Optional
 
 import numpy as np
@@ -58,20 +58,32 @@ class CrossingEvent:
 @dataclass
 class _TrackCrossingState:
     """Состояние одного трека для CrossingBuffer."""
-    prev_cy: Optional[float] = None
-    pending_direction: Optional[str] = None   # "up" / "down"
-    pending_frames: int = 0
-    in_cooldown: bool = False                 # сразу после события
-    crossing_history: list[float] = field(default_factory=list)
+    anchor_zone: Optional[str] = None         # "above" / "below" — где трек "живёт"
+    current_zone: Optional[str] = None        # "above" / "below" — где сейчас
+    zone_frames: int = 0                      # сколько кадров подряд в current_zone
+    cooldown_frames: int = 0                  # сколько кадров ещё кулдаун
+
+
+def _zone_of(cy: float, line_y: int) -> str:
+    """Определить зону центра относительно линии портала."""
+    return "above" if cy < line_y else "below"
 
 
 class CrossingBuffer:
     """
-    Накапливает кандидатов на пересечение и подтверждает их за N кадров.
+    Подтверждает пересечение линии через смену зон.
 
-    Без буфера один шумный кадр (например, бокс прыгнул через линию из-за
-    окклюзии рукой) сразу породил бы событие. Здесь мы требуем, чтобы
-    направление движения через линию повторилось N раз подряд.
+    Вместо отслеживания "пересёк ли центр линию за один кадр" (что
+    хрупко — реальное пересечение случается ровно в одном кадре),
+    запоминаем *в какой половине кадра* трек стабильно находится:
+      - "above"  — центр выше линии портала
+      - "below"  — центр ниже линии портала
+
+    Когда трек был anchor_zone=above и N кадров подряд сидит в зоне
+    below — эмитим "returned" (спустился вниз). И наоборот — "taken".
+
+    Такая логика устойчива к дрожанию бокса на ±несколько пикселей
+    и работает, даже если детектор пропустил сам момент пересечения.
     """
 
     def __init__(
@@ -93,52 +105,48 @@ class CrossingBuffer:
         state: _TrackCrossingState = self._states.setdefault(
             track_id, _TrackCrossingState()
         )
-        prev: Optional[float] = state.prev_cy
-        state.prev_cy = cy
+        zone: str = _zone_of(cy, self.line_y)
 
-        if prev is None:
+        # Первый раз видим трек — фиксируем якорную зону, событий не эмитим
+        if state.anchor_zone is None:
+            state.anchor_zone = zone
+            state.current_zone = zone
+            state.zone_frames = 1
             return None
 
-        # Кулдаун: ждём, пока трек уйдёт от линии
-        if state.in_cooldown:
-            if abs(cy - self.line_y) > self.reset_distance:
-                state.in_cooldown = False
-                state.pending_direction = None
-                state.pending_frames = 0
+        # Кулдаун после события: ждём, пока счётчик истечёт И трек уйдёт
+        # от линии, чтобы не выдать повторное событие от дрожания у границы
+        if state.cooldown_frames > 0:
+            state.cooldown_frames -= 1
+            state.current_zone = zone
+            state.zone_frames = 1
+            if state.cooldown_frames == 0 and abs(cy - self.line_y) > self.reset_distance:
+                # Кулдаун закончен, новая якорная зона — текущая
+                state.anchor_zone = zone
             return None
 
-        # Проверяем факт пересечения линии за этот кадр
-        crossed_down: bool = prev < self.line_y <= cy   # сверху вниз → returned
-        crossed_up: bool = prev > self.line_y >= cy     # снизу вверх → taken
-
-        direction: Optional[str] = None
-        if crossed_down:
-            direction = "down"
-        elif crossed_up:
-            direction = "up"
-
-        if direction is None:
-            # Кадр без пересечения — сбрасываем накопленный счётчик,
-            # чтобы случайные одиночные пересечения с разрывом не суммировались.
-            state.pending_direction = None
-            state.pending_frames = 0
-            return None
-
-        # Накапливаем подтверждения по тому же направлению
-        if state.pending_direction == direction:
-            state.pending_frames += 1
+        # Накапливаем подтверждения пребывания в одной зоне
+        if zone == state.current_zone:
+            state.zone_frames += 1
         else:
-            state.pending_direction = direction
-            state.pending_frames = 1
+            state.current_zone = zone
+            state.zone_frames = 1
 
-        # Подтверждение достигнуто — выдаём событие, входим в кулдаун
-        if state.pending_frames >= self.confirm_frames:
-            state.in_cooldown = True
-            state.pending_direction = None
-            state.pending_frames = 0
-            return "taken" if direction == "up" else "returned"
+        # Трек всё ещё в своей якорной зоне — событий нет
+        if zone == state.anchor_zone:
+            return None
 
-        return None
+        # Трек перешёл в противоположную зону. Ждём подтверждения
+        if state.zone_frames < self.confirm_frames:
+            return None
+
+        # Подтверждено: смена зоны above→below = returned, below→above = taken
+        direction: str = "taken" if zone == "above" else "returned"
+        state.anchor_zone = zone
+        state.zone_frames = 0
+        # Кулдаун в кадрах ≈ confirm_frames, чтобы не словить дребезг
+        state.cooldown_frames = self.confirm_frames
+        return direction
 
     def cleanup(self, active_ids: set[int]) -> None:
         """Удалить состояние треков, которых больше нет в кадре."""
@@ -261,8 +269,9 @@ class LineCrossingDetector:
         фильтрации/дедупликации) — обычно 0 или 1.
         """
         # 1. Подавление по руке: если рука в кадре, пропускаем фазу
-        # обновления буфера, но оставляем prev_cy актуальным, чтобы
-        # после исчезновения руки не сработать на скачке.
+        # подтверждения смены зоны, но обновляем current_zone,
+        # чтобы после исчезновения руки решение принималось от
+        # актуальной позиции трека.
         hand_in_frame: bool = (
             self.hand_suppressor is not None
             and self.hand_suppressor.is_hand_present(frame)
@@ -277,11 +286,14 @@ class LineCrossingDetector:
             active_ids.add(tid)
 
             if hand_in_frame:
-                # Просто запоминаем последнее cy без принятия решения
+                # Пока рука в кадре — не накапливаем подтверждения смены зоны,
+                # но обновляем текущую зону, чтобы после исчезновения руки
+                # решение принималось от актуальной позиции трека
                 state = self.buffer._states.setdefault(tid, _TrackCrossingState())
-                state.prev_cy = cy
-                state.pending_direction = None
-                state.pending_frames = 0
+                if state.anchor_zone is None:
+                    state.anchor_zone = _zone_of(cy, self.buffer.line_y)
+                state.current_zone = _zone_of(cy, self.buffer.line_y)
+                state.zone_frames = 0
                 continue
 
             direction: Optional[str] = self.buffer.update(tid, cy)

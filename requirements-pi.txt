@@ -18,8 +18,11 @@ Pillow>=10.0.0
 ultralytics>=8.3.0
 lapx>=0.5.5
 
-# MediaPipe (поддержка aarch64 с 0.10.x)
-mediapipe>=0.10.14
+# MediaPipe — опционально (подавление по руке).
+# На Pi 5 с Python 3.13 wheels нет. Если не ставится — просто пропустите;
+# HandSuppressor молча отключается, CrossingBuffer и без него работает стабильно.
+# Установка вручную: pip install "mediapipe>=0.10.14"
+# mediapipe>=0.10.14
 
 # Управление GPIO без root через lgpio backend
 gpiozero>=2.0

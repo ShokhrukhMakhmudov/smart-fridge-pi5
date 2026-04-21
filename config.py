@@ -108,7 +108,7 @@ SERVER_API_KEY: str | None = os.environ.get("SF_SERVER_API_KEY")
 
 
 # ── Отладка ──────────────────────────────────────────────────────
-# Показывать окно OpenCV с визуализацией (False на headless-Pi).
-SHOW_WINDOW: bool = _env_bool("SHOW_WINDOW", False)
+# Показывать окно OpenCV с визуализацией (True для dev, на headless-Pi: SF_SHOW_WINDOW=false).
+SHOW_WINDOW: bool = _env_bool("SHOW_WINDOW", True)
 # Печатать пер-кадровую статистику каждые N кадров.
 PERF_LOG_EVERY: int = _env_int("PERF_LOG_EVERY", 30)

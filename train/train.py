@@ -60,6 +60,8 @@ def main() -> None:
                         help="Базовая модель ultralytics (yolo11n.pt по умолчанию)")
     parser.add_argument("--name", default="smart_fridge",
                         help="Имя запуска (папка в runs/detect/)")
+    parser.add_argument("--patience", type=int, default=30,
+                        help="Эпох без улучшений до ранней остановки (0 = отключить)")
     args = parser.parse_args()
 
     # Импорт ultralytics — тяжёлый, поэтому внутри main()
@@ -85,7 +87,7 @@ def main() -> None:
         mosaic=1.0, mixup=0.0,
         # Сохраняем чекпоинты периодически
         save_period=10,
-        patience=30,  # ранняя остановка, если 30 эпох нет прогресса
+        patience=args.patience,  # ранняя остановка, если N эпох нет прогресса
     )
 
     # ── Копируем лучший чекпоинт в models/ для удобного запуска ──
