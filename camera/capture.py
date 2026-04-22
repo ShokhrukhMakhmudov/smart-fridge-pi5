@@ -1,16 +1,19 @@
 """
 Унифицированный захват кадров с камеры.
 
-Поддерживает два бэкенда:
-  - Picamera2  — нативный драйвер MIPI CSI для IMX219 (рекомендуется на Pi 5)
-  - OpenCV     — универсальный VideoCapture (USB-камеры, Windows-разработка)
+Поддерживает три источника:
+  - Picamera2     — нативный драйвер MIPI CSI для IMX219 (рекомендуется на Pi 5)
+  - OpenCV камера — универсальный VideoCapture (USB-камеры, Windows-разработка)
+  - Видеофайл    — для тестирования модели без live-источника (передать video_path)
 
-Режим выбирается автоматически: если доступен picamera2 и CAMERA_BACKEND != "opencv",
-используется CSI; иначе — OpenCV. Класс реализует контекст-менеджер, поэтому
-ресурсы камеры гарантированно освобождаются при любом исходе цикла.
+Режим выбирается автоматически: если указан video_path — читаем файл;
+иначе если доступен picamera2 и CAMERA_BACKEND != "opencv" — используем CSI;
+иначе — OpenCV. Класс реализует контекст-менеджер.
 """
 
-from typing import Optional
+import time
+from pathlib import Path
+from typing import Optional, Union
 
 import numpy as np
 
@@ -43,23 +46,36 @@ class Camera:
         height: int = CAMERA_HEIGHT,
         fps: int = CAMERA_FPS,
         backend: str = CAMERA_BACKEND,
+        video_path: Optional[Union[str, Path]] = None,
+        loop_video: bool = False,
+        realtime_video: bool = True,
     ) -> None:
         self.index: int = index
         self.width: int = width
         self.height: int = height
         self.fps: int = fps
         self.backend: str = backend
+        self.video_path: Optional[Path] = Path(video_path) if video_path else None
+        self.loop_video: bool = loop_video
+        self.realtime_video: bool = realtime_video
 
         self._picam = None   # экземпляр Picamera2 (при наличии)
         self._cap = None     # экземпляр cv2.VideoCapture (фоллбэк)
         self._resolved_backend: str = "none"
+        self._frame_interval: float = 0.0   # для имитации fps при чтении файла
+        self._last_frame_time: float = 0.0
 
         self._open()
 
     # ── Инициализация ────────────────────────────────────────────
 
     def _open(self) -> None:
-        """Открыть камеру согласно выбранному бэкенду с фоллбэком на OpenCV."""
+        """Открыть источник кадров: видеофайл, Picamera2 или OpenCV-камеру."""
+        # Приоритет: если передан путь к видео — используем его
+        if self.video_path is not None:
+            self._open_video()
+            return
+
         if self.backend in ("auto", "picamera"):
             if self._try_open_picamera():
                 return
@@ -71,6 +87,36 @@ class Camera:
 
         # Фоллбэк на OpenCV VideoCapture
         self._open_opencv()
+
+    def _open_video(self) -> None:
+        """Открыть видеофайл как источник кадров."""
+        import cv2  # noqa: PLC0415
+
+        if not self.video_path.exists():
+            raise FileNotFoundError(f"Видеофайл не найден: {self.video_path}")
+
+        cap = cv2.VideoCapture(str(self.video_path))
+        if not cap.isOpened():
+            raise RuntimeError(
+                f"Не удалось открыть видео: {self.video_path}. "
+                "Проверьте формат (ffmpeg-совместимый) и кодек."
+            )
+
+        self.width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or self.width
+        self.height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or self.height
+        file_fps: float = cap.get(cv2.CAP_PROP_FPS) or float(self.fps)
+        self.fps = int(file_fps)
+        frame_count: int = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+        self._cap = cap
+        self._resolved_backend = "video"
+        if self.realtime_video and file_fps > 0:
+            self._frame_interval = 1.0 / file_fps
+        print(
+            f"[camera] Видео: {self.video_path.name} — "
+            f"{self.width}x{self.height} @ {self.fps}fps, кадров={frame_count}, "
+            f"loop={self.loop_video}, realtime={self.realtime_video}"
+        )
 
     def _try_open_picamera(self) -> bool:
         """Попытаться открыть CSI-камеру через Picamera2. True при успехе."""
@@ -136,7 +182,25 @@ class Camera:
         if self._cap is not None:
             ok, frame = self._cap.read()
             if not ok:
-                return None
+                # Для видеофайла: зациклить или отдать None (конец потока)
+                if self._resolved_backend == "video" and self.loop_video:
+                    import cv2  # noqa: PLC0415
+                    self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    ok, frame = self._cap.read()
+                    if not ok:
+                        return None
+                else:
+                    return None
+
+            # Если читаем файл и хотим играть в реальном темпе —
+            # подождать между кадрами, чтобы не пролистать видео за секунду
+            if self._frame_interval > 0:
+                now: float = time.perf_counter()
+                wait: float = self._frame_interval - (now - self._last_frame_time)
+                if wait > 0:
+                    time.sleep(wait)
+                self._last_frame_time = time.perf_counter()
+
             return frame
 
         return None

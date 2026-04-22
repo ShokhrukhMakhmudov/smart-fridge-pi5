@@ -7,11 +7,13 @@ Smart Fridge OS — точка входа.
 подписываться на события.
 
 Запуск:
-    python main.py                      # CV + сервер с настройками из config.py
-    python main.py --no-server          # только CV-цикл, без HTTP
-    python main.py --no-cv              # только сервер (для отладки API)
-    python main.py --mode cpu           # форсировать конкретный бэкенд
-    python main.py --show               # показывать окно OpenCV с визуализацией
+    python main.py                             # CV + сервер с настройками из config.py
+    python main.py --no-server                 # только CV-цикл, без HTTP
+    python main.py --no-cv                     # только сервер (для отладки API)
+    python main.py --mode cpu                  # форсировать конкретный бэкенд
+    python main.py --show                      # показывать окно OpenCV
+    python main.py --video test.mp4 --show     # прогнать модель на видеофайле
+    python main.py --video test.mp4 --loop     # + зациклить видео
 """
 
 import argparse
@@ -112,9 +114,11 @@ def run_cv_loop(
     tracker: ByteTracker,
     crossing: LineCrossingDetector,
     show_window: bool,
+    video_path: Optional[str] = None,
+    loop_video: bool = False,
 ) -> None:
-    """Главный цикл: камера → детектор → трекер → пересечения."""
-    with Camera() as cam:
+    """Главный цикл: камера/видео → детектор → трекер → пересечения."""
+    with Camera(video_path=video_path, loop_video=loop_video) as cam:
         frame_h: int = cam.height
         line_y: int = int(frame_h * CROSSING_LINE_Y)
         crossing.line_y = line_y
@@ -186,6 +190,10 @@ def main() -> None:
                         help="Не запускать CV-цикл (только сервер)")
     parser.add_argument("--show", action="store_true", default=SHOW_WINDOW,
                         help="Показывать окно OpenCV с визуализацией")
+    parser.add_argument("--video", default=None,
+                        help="Путь к видеофайлу — запуск на записи вместо камеры")
+    parser.add_argument("--loop", action="store_true",
+                        help="Зациклить видеофайл (с --video)")
     parser.add_argument("--host", default=SERVER_HOST)
     parser.add_argument("--port", type=int, default=SERVER_PORT)
     args = parser.parse_args()
@@ -255,7 +263,12 @@ def main() -> None:
                 time.sleep(1.0)
         else:
             assert detector is not None and tracker is not None and crossing is not None
-            run_cv_loop(detector, tracker, crossing, show_window=args.show)
+            run_cv_loop(
+                detector, tracker, crossing,
+                show_window=args.show,
+                video_path=args.video,
+                loop_video=args.loop,
+            )
     except KeyboardInterrupt:
         print("\n[main] Получен Ctrl+C, останавливаюсь")
     finally:
