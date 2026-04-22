@@ -16,12 +16,23 @@ venv/
 .DS_Store
 Thumbs.db
 
-# Модели и веса (большие бинари)
-models/*.pt
-models/*.onnx
-models/*.hef
-models/*_ncnn_model/
+# Модели и веса (большие бинари) — игнорируем везде, кроме models/,
+# где они хранятся через Git LFS (см. .gitattributes).
+*.pt
+*.onnx
+*.hef
+!models/*.pt
+!models/*.onnx
+!models/*.hef
+*_ncnn_model/
 runs/
+
+# Тестовые видео (большие, локальные)
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
 
 # Датасет (большие бинари + личные данные)
 dataset/*/
