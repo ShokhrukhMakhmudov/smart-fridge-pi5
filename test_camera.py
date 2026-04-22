@@ -80,7 +80,7 @@ def main() -> None:
                         help="Путь к видеофайлу — тест на записи вместо камеры")
     parser.add_argument("--loop", action="store_true",
                         help="Зациклить видео (только с --video)")
-    parser.add_argument("--cam", type=int, default=None,
+    parser.add_argument("--cam", type=str, default=None,
                         help="Индекс веб-камеры (для OpenCV-бэкенда)")
     args = parser.parse_args()
 
