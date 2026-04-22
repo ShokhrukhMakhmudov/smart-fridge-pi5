@@ -143,13 +143,61 @@ class Camera:
             return False
 
     def _open_opencv(self) -> None:
-        """Открыть камеру через OpenCV VideoCapture."""
+        """
+        Открыть USB-камеру через OpenCV VideoCapture.
+
+        На Linux (Pi/Ubuntu) полезно явно указать V4L2 backend — без него
+        OpenCV может сначала пытаться GStreamer/FFmpeg и таймаутить.
+        Если self.index не открылся, пробуем 0..4 как fallback: индексы
+        /dev/videoN для USB-камеры не всегда совпадают с ожидаемым (часто
+        0-й занят метаданным устройством, реальный поток на /dev/video1).
+        """
+        import platform  # noqa: PLC0415
         import cv2  # noqa: PLC0415
 
-        cap = cv2.VideoCapture(self.index)
-        if not cap.isOpened():
+        is_linux: bool = platform.system() == "Linux"
+        # На Linux форсируем V4L2 — это нативный бэкенд для USB/CSI камер
+        backend_flag: int = cv2.CAP_V4L2 if is_linux else cv2.CAP_ANY
+
+        # Сначала пробуем явно указанный индекс, затем 0..4 как fallback
+        candidates: list[int] = [self.index] + [
+            i for i in range(5) if i != self.index
+        ]
+
+        cap: Optional["cv2.VideoCapture"] = None
+        opened_index: int = -1
+        for idx in candidates:
+            try:
+                trial = cv2.VideoCapture(idx, backend_flag)
+            except Exception as e:
+                print(f"[camera] /dev/video{idx}: исключение при открытии: {e}")
+                continue
+
+            if not trial.isOpened():
+                trial.release()
+                print(f"[camera] /dev/video{idx}: не открылся")
+                continue
+
+            # Камера открылась — проверим, что реально читаются кадры.
+            # Некоторые устройства (например, метаданные IMX219 на video1)
+            # успешно открываются, но возвращают ok=False при read().
+            ok, _frame = trial.read()
+            if not ok:
+                trial.release()
+                print(f"[camera] /dev/video{idx}: открыт, но read() вернул None")
+                continue
+
+            cap = trial
+            opened_index = idx
+            break
+
+        if cap is None:
             raise RuntimeError(
-                f"Не удалось открыть камеру {self.index} через OpenCV"
+                f"Не удалось открыть USB-камеру ни по одному индексу (0..4). "
+                f"Проверьте:\n"
+                f"  ls /dev/video*\n"
+                f"  v4l2-ctl --list-devices\n"
+                f"  ffmpeg -f v4l2 -i /dev/video0 -frames:v 1 /tmp/test.jpg"
             )
 
         # Запрашиваем желаемые параметры. Реально поддерживаемое разрешение
@@ -157,12 +205,20 @@ class Camera:
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
         cap.set(cv2.CAP_PROP_FPS, self.fps)
+        # MJPG часто даёт более высокий FPS на USB-камерах, чем YUYV
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
 
         self.width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or self.width
         self.height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or self.height
+        actual_fps: float = cap.get(cv2.CAP_PROP_FPS) or float(self.fps)
+        self.index = opened_index
         self._cap = cap
         self._resolved_backend = "opencv"
-        print(f"[camera] OpenCV запущен: {self.width}x{self.height}")
+        print(
+            f"[camera] OpenCV запущен: /dev/video{opened_index} "
+            f"{self.width}x{self.height}@{int(actual_fps)}fps "
+            f"(backend={'V4L2' if is_linux else 'ANY'})"
+        )
 
     # ── Публичный API ────────────────────────────────────────────
 
