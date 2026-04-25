@@ -95,15 +95,10 @@ class Camera:
         if not self.video_path.exists():
             raise FileNotFoundError(f"Видеофайл не найден: {self.video_path}")
 
-        if isinstance(self.index, str):
-            device = self.index
-        else:
-            device = f"/dev/video{self.index}"
-
-        cap = cv2.VideoCapture(str(device))
+        cap = cv2.VideoCapture(str(self.video_path))
         if not cap.isOpened():
             raise RuntimeError(
-                f"Не удалось открыть видео: {device}"
+                f"Не удалось открыть видео: {self.video_path}"
             )
 
         self.width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or self.width
