@@ -24,6 +24,7 @@ Thumbs.db
 !models/*.pt
 !models/*.onnx
 !models/*.hef
+models/calib_*/
 *_ncnn_model/
 runs/
 
@@ -40,3 +41,5 @@ dataset/*/
 
 # Логи
 *.log
+
+/hailo_env/
