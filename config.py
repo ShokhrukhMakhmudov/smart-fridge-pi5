@@ -65,7 +65,7 @@ CAMERA_BACKEND: str = _env_str("CAMERA_BACKEND", "auto")  # auto/picamera/opencv
 MODEL_PATH: str = _env_str("MODEL_PATH", str(MODELS_DIR / "best.pt"))
 MODEL_HEF_PATH: str = _env_str("MODEL_HEF_PATH", str(MODELS_DIR / "best.hef"))
 # Размер входа YOLO. 640 — стандарт, 320 быстрее на CPU.
-MODEL_IMGSZ: int = _env_int("MODEL_IMGSZ", 640)
+MODEL_IMGSZ: int = _env_int("MODEL_IMGSZ", 320)
 # Минимальная уверенность детектора.
 MODEL_CONF: float = _env_float("MODEL_CONF", 0.5)
 # Режим инференса: auto/hailo/ncnn/cpu.

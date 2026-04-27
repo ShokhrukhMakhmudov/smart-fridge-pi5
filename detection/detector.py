@@ -351,44 +351,116 @@ class _HailoRunner:
         orig_h: int,
     ) -> list[Detection]:
         """
-        Разобрать выход HEF с встроенным NMS.
+        Постпроцессинг сырого выхода YOLOv11n с Hailo.
 
-        Формат выхода YOLOv11-NMS Hailo: словарь, где под каждым классом
-        лежит массив [n, 5] с колонками [ymin, xmin, ymax, xmax, score] в
-        нормализованных координатах [0..1]. Если модель скомпилирована
-        иначе — подправьте этот метод.
+        Формат выхода модели:
+        concat18   — (1, 2100, 64): encoded boxes в DFL формате
+        activation2 — (1, 2100, 1): sigmoid scores на класс
+
+        2100 = 20*20 + 10*10 + 5*5 анкоров для imgsz=320.
+        DFL boxes: 64 = 4 стороны * 16 бинов — декодируем через softmax+arange.
         """
-        detections: list[Detection] = []
-        target_h, target_w, _ = self._input_shape
+        target_h, target_w, _ = self._input_shape  # (320, 320, 3)
         sx: float = orig_w / target_w
         sy: float = orig_h / target_h
 
-        for output_name, data in raw_out.items():
+        # Извлекаем тензоры по ключам
+        boxes_enc = None  # (1, 2100, 64)
+        scores_raw = None  # (1, 2100, 1)
+        for name, data in raw_out.items():
             arr = np.asarray(data)
-            # Стандартный формат выхода NMS: [batch, classes, max_dets, 5]
-            if arr.ndim == 4:
-                arr = arr[0]  # убираем batch
-                for cls_id, per_class in enumerate(arr):
-                    for row in per_class:
-                        score: float = float(row[4])
-                        if score < self.confidence:
-                            continue
-                        ymin, xmin, ymax, xmax = row[0:4]
-                        x1 = int(xmin * target_w * sx)
-                        y1 = int(ymin * target_h * sy)
-                        x2 = int(xmax * target_w * sx)
-                        y2 = int(ymax * target_h * sy)
-                        detections.append(Detection(
-                            x1=x1, y1=y1, x2=x2, y2=y2,
-                            confidence=score,
-                            class_id=int(cls_id),
-                            class_name=self.class_names.get(
-                                int(cls_id), f"class_{cls_id}"
-                            ),
-                        ))
-            # Иной формат — придётся доработать под конкретный экспорт
-            else:
-                print(f"[detector] Неизвестный формат выхода Hailo "
-                      f"({output_name}, shape={arr.shape}) — пропускаю")
+            if arr.shape[-1] == 64:
+                boxes_enc = arr[0]   # (2100, 64)
+            elif arr.shape[-1] == 1:
+                scores_raw = arr[0]  # (2100, 1)
 
+        if boxes_enc is None or scores_raw is None:
+            print(f"[detector] Неожиданный формат выхода: "
+                f"{[(k, np.asarray(v).shape) for k, v in raw_out.items()]}")
+            return []
+
+        # Scores: sigmoid уже применён (activation2), просто берём значение
+        scores = scores_raw[:, 0]  # (2100,)
+
+        # Фильтрация по порогу до декодирования — экономит время
+        mask = scores >= self.confidence
+        if not mask.any():
+            return []
+
+        scores = scores[mask]
+        boxes_enc = boxes_enc[mask]  # (N, 64)
+
+        # DFL декодирование: 64 = 4 * 16
+        # Каждая сторона (left, top, right, bottom) = softmax по 16 бинам * arange(16)
+        reg = boxes_enc.reshape(-1, 4, 16)  # (N, 4, 16)
+        # softmax по последней оси
+        reg_exp = np.exp(reg - reg.max(axis=-1, keepdims=True))
+        reg_soft = reg_exp / reg_exp.sum(axis=-1, keepdims=True)  # (N, 4, 16)
+        arange = np.arange(16, dtype=np.float32)
+        dist = (reg_soft * arange).sum(axis=-1)  # (N, 4): left, top, right, bottom
+
+        # Восстанавливаем анкорные точки для imgsz=320
+        # Страйды: 8, 16, 32 → сетки 40x40, 20x20, 10x10
+        strides = [8, 16, 32]
+        grids = []
+        for stride in strides:
+            gs = target_w // stride
+            gy, gx = np.meshgrid(np.arange(gs), np.arange(gs), indexing='ij')
+            cx = (gx.flatten() + 0.5) * stride
+            cy = (gy.flatten() + 0.5) * stride
+            grids.append(np.stack([cx, cy], axis=1))
+        anchors = np.concatenate(grids, axis=0)  # (2100, 2): cx, cy
+
+        anchors = anchors[mask]  # (N, 2)
+        strides_per_anchor = np.concatenate([
+            np.full(((target_w // s) ** 2,), s) for s in strides
+        ])[mask]  # (N,)
+
+        # dist в пикселях модели (умножаем на stride)
+        dist_px = dist * strides_per_anchor[:, None]  # (N, 4)
+
+        # ltrb → xyxy
+        x1 = anchors[:, 0] - dist_px[:, 0]
+        y1 = anchors[:, 1] - dist_px[:, 1]
+        x2 = anchors[:, 0] + dist_px[:, 2]
+        y2 = anchors[:, 1] + dist_px[:, 3]
+
+        # NMS (простой greedy по IoU)
+        boxes_xyxy = np.stack([x1, y1, x2, y2], axis=1)
+        keep = self._nms(boxes_xyxy, scores, iou_threshold=0.45)
+
+        detections: list[Detection] = []
+        for i in keep:
+            # Масштабируем к оригинальному разрешению
+            bx1 = int(np.clip(x1[i] * sx, 0, orig_w))
+            by1 = int(np.clip(y1[i] * sy, 0, orig_h))
+            bx2 = int(np.clip(x2[i] * sx, 0, orig_w))
+            by2 = int(np.clip(y2[i] * sy, 0, orig_h))
+            # Для однокласcовой модели class_id=0
+            cls_id = 0
+            detections.append(Detection(
+                x1=bx1, y1=by1, x2=bx2, y2=by2,
+                confidence=float(scores[i]),
+                class_id=cls_id,
+                class_name=self.class_names.get(cls_id, "product"),
+            ))
         return detections
+
+    @staticmethod
+    def _nms(boxes: np.ndarray, scores: np.ndarray, iou_threshold: float = 0.45) -> list[int]:
+        """Greedy NMS. boxes: (N,4) xyxy, scores: (N,)."""
+        x1, y1, x2, y2 = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
+        areas = (x2 - x1) * (y2 - y1)
+        order = scores.argsort()[::-1]
+        keep = []
+        while order.size > 0:
+            i = order[0]
+            keep.append(int(i))
+            ix1 = np.maximum(x1[i], x1[order[1:]])
+            iy1 = np.maximum(y1[i], y1[order[1:]])
+            ix2 = np.minimum(x2[i], x2[order[1:]])
+            iy2 = np.minimum(y2[i], y2[order[1:]])
+            inter = np.maximum(0, ix2 - ix1) * np.maximum(0, iy2 - iy1)
+            iou = inter / (areas[i] + areas[order[1:]] - inter + 1e-6)
+            order = order[1:][iou < iou_threshold]
+        return keep
