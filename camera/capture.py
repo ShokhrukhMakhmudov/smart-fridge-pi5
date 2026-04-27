@@ -147,7 +147,7 @@ class Camera:
         import cv2
 
         is_linux: bool = platform.system() == "Linux"
-        backend_flag: int = cv2.CAP_V4L2 if is_linux else cv2.CAP_ANY
+        backend_flag: int = cv2.CAP_ANY
 
         # На Linux перебираем реальные пути /dev/videoN через glob
         if is_linux:
